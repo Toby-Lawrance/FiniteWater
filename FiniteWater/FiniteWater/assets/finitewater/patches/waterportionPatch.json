@@ -1,0 +1,22 @@
+[
+  {
+    "file": "game:itemtypes/liquid/waterportion",
+    "op": "replace",
+    "path": "/attributes/waterTightContainerProps/whenSpilled/stack",
+    "value": {
+      "type": "block",
+      "code": "finitewater:finitewater-water-1"
+    }
+  },
+  {
+    "file": "game:itemtypes/liquid/waterportion",
+    "op": "replace",
+    "path": "/attributes/waterTightContainerProps/whenSpilled/stackByFillLevel",
+    "value": {
+      "10": {
+        "type": "block",
+        "code": "finitewater:finitewater-water-1"
+      }
+    }
+  }
+]
