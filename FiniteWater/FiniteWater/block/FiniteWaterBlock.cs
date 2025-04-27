@@ -44,7 +44,7 @@ namespace FiniteWater.block
                     {
                         world.Logger.Log(EnumLogType.Debug, $"Evaporating the finite water at ({pos.ToLocalPosition(world.Api)}) by one level");
                         var thisBlock = world.BlockAccessor.GetBlock(pos);
-                        var currentLevel = FluidLevelUtilities.GetBlockLevel(thisBlock, this);
+                        var currentLevel = thisBlock.LiquidLevel;
                         var newId = FluidLevelUtilities.GetBlockIdForLevel(currentLevel - 1, world, this);
                         world.BulkBlockAccessor.SetBlock(newId, pos,BlockLayersAccess.Fluid);
                         //Once it is air, we can give up

@@ -41,8 +41,6 @@ namespace FiniteWater.blockBehaviors
         private const int MAXLIQUIDLEVEL = 7;
         private const float MAXLIQUIDLEVEL_float = MAXLIQUIDLEVEL;
 
-        private const int MAXFLUIDLEVEL = 16;
-
         private int spreadDelay = 150;
 
         public FiniteSpreadLevelling(Block block) : base(block)
@@ -89,7 +87,7 @@ namespace FiniteWater.blockBehaviors
 
         public void TakeLiquid(IWorldAccessor world, BlockPos pos, Block b)
         {
-            var level = FluidLevelUtilities.GetBlockLevel(b, this.block);
+            var level = b.LiquidLevel;
             if(level > 0)
             {
                 SetLiquidLevelAt(pos, level - 1, world, level);
@@ -97,9 +95,9 @@ namespace FiniteWater.blockBehaviors
         }
 
         public void UpdateLevels(IWorldAccessor world, BlockPos pos)
-        {
+        {   
             Block ourBlock = world.BlockAccessor.GetBlock(pos, BlockLayersAccess.Fluid);
-            int waterLevel = FluidLevelUtilities.GetBlockLevel(ourBlock, this.block);
+            int waterLevel = ourBlock.LiquidLevel;
 
             var dSolid = world.BlockAccessor.GetMostSolidBlock(pos.DownCopy());
             var ourSolid = world.BlockAccessor.GetBlock(pos, BlockLayersAccess.SolidBlocks);
@@ -114,10 +112,14 @@ namespace FiniteWater.blockBehaviors
                 List<BlockPos> downwardPours = FindDownwardPours(world, pos, ourBlock);
                 if(downwardPours.Count > 0)
                 {
-
+                    if(TryPouringDown(world,ourSolid,ourBlock,pos, downwardPours))
+                    {
+                        return;
+                    }
                 }
                 //Then we try to spread
-                else if (waterLevel > 1)
+                
+                if (waterLevel > 1)
                 {
                     TryMoveHorizontal(world, ourBlock, ourSolid, pos);
                 }
@@ -149,10 +151,10 @@ namespace FiniteWater.blockBehaviors
             if(CanSpreadIntoBlock(ourBlock,ourSolid,pos,downPos,BlockFacing.DOWN,world))
             {
                 var levelBelow = FluidLevelUtilities.GetBlockLevel(world.BlockAccessor, downPos, this.block);
-                var currentLevel = FluidLevelUtilities.GetBlockLevel(ourBlock,this.block);
+                var currentLevel = ourBlock.LiquidLevel;
 
-                var newLevelBelow = Math.Min(16, levelBelow + currentLevel);
-                var newLevel = Math.Max(0, currentLevel - (MAXFLUIDLEVEL - levelBelow));
+                var newLevelBelow = Math.Min(MAXLIQUIDLEVEL, levelBelow + currentLevel);
+                var newLevel = Math.Max(0, currentLevel - (MAXLIQUIDLEVEL - levelBelow));
 
                 if(newLevelBelow + newLevel != levelBelow + currentLevel)
                 {
@@ -182,7 +184,7 @@ namespace FiniteWater.blockBehaviors
                 return world.BlockAccessor.GetBlock(nPos);
             });
 
-            int totalWaterLevel = validBlocks.Sum((b) => FluidLevelUtilities.GetBlockLevel(b,this.block));
+            int totalWaterLevel = validBlocks.Sum((b) => b.LiquidLevel);
             //Used for favouritism in tie-breaks
             var currentWind = world.BlockAccessor.GetWindSpeedAt(pos);
             var madeChanges = false;
@@ -281,7 +283,7 @@ namespace FiniteWater.blockBehaviors
                 return true;
             }
 
-            if(FluidLevelUtilities.GetBlockLevel(neighborLiquid,this.block) == MAXFLUIDLEVEL)
+            if(neighborLiquid.LiquidLevel == MAXLIQUIDLEVEL)
             {
                 return false;
             }
