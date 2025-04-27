@@ -37,5 +37,11 @@ namespace FiniteWater
             Mod.Logger.Notification("Hello from template mod client side: " + Lang.Get("finitewater:hello"));
         }
 
+        public override void Dispose()
+        {
+            harmony?.UnpatchAll(Mod.Info.ModID);
+            base.Dispose();
+        }
+
     }
 }

@@ -3,39 +3,23 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
+using Vintagestory.Common;
 using Vintagestory.GameContent;
 using Vintagestory.ServerMods;
 
 namespace FiniteWater.blockBehaviors
 {
-    [HarmonyPatch]
-    internal class FinitePatches
-    {
-        [HarmonyPostfix]
-        [HarmonyPatch(typeof(BlockLiquidContainerBase), nameof(BlockLiquidContainerBase.TryFillFromBlock),typeof(ItemSlot),typeof(EntityAgent),typeof(BlockPos))]
-        public static void TryFill(bool __result, EntityAgent byEntity, BlockPos pos)
-        {
-            if (__result)
-            {
-                //Check for behaviour
-                Block block = byEntity.World.BlockAccessor.GetBlock(pos, BlockLayersAccess.FluidOrSolid);
-                if(block.HasBehavior<FiniteSpreadLevelling>())
-                {
-                    var behaviour = block.GetBehavior<FiniteSpreadLevelling>();
-                    behaviour.TakeLiquid(byEntity.World, pos, block);
-                }
-            }
-        }
-    }
-
     internal class FiniteSpreadLevelling : BlockBehavior
     {
         private const int MAXLIQUIDLEVEL = 7;
@@ -58,12 +42,59 @@ namespace FiniteWater.blockBehaviors
             this.spreadDelay = properties["spreadDelay"].AsInt();
         }
 
+        public override void OnBlockPlaced(IWorldAccessor world, BlockPos blockPos, ref EnumHandling handling)
+        {
+            var whatsThere = world.BlockAccessor.GetBlock(blockPos, BlockLayersAccess.Fluid);
+            if (whatsThere.Class == this.block.Class)
+            {
+                //Yay
+                world.Api.Logger.Debug($"There was a thing here of: {whatsThere.Code}");
+            } else if (whatsThere.Id == 0)
+            {
+                world.Api.Logger.Debug($"There was only air there");
+            }
+            base.OnBlockPlaced(world, blockPos, ref handling);
+        }
+        
+        public override bool CanPlaceBlock(IWorldAccessor world, IPlayer byPlayer, BlockSelection blockSel, ref EnumHandling handling, ref string failureCode)
+        {
+            return base.CanPlaceBlock(world, byPlayer, blockSel, ref handling, ref failureCode);
+        }
+
+        public override bool TryPlaceBlock(IWorldAccessor world, IPlayer byPlayer, ItemStack itemstack, BlockSelection blockSel, ref EnumHandling handling, ref string failureCode)
+        {
+            return base.TryPlaceBlock(world, byPlayer, itemstack, blockSel, ref handling, ref failureCode);
+        }
+
         public override bool DoPlaceBlock(IWorldAccessor world, IPlayer byPlayer, BlockSelection blockSel, ItemStack byItemStack, ref EnumHandling handling)
         {
             if (world is IServerWorldAccessor)
             {
                 //Try to add?
-                world.RegisterCallbackUnique(OnDelayedWaterUpdateCheck, blockSel.Position, spreadDelay);
+                var blockAtPos = world.BlockAccessor.GetBlock(blockSel.Position);
+                if (blockAtPos.Class == blockSel?.Block?.Class)
+                {
+                    var levelOfAdd = FluidLevelUtilities.GetBlockLevel(blockSel.Block, blockSel.Block);
+                    var currentLevel = FluidLevelUtilities.GetBlockLevel(blockAtPos, blockSel.Block);
+                    if ((currentLevel + levelOfAdd) <= MAXLIQUIDLEVEL)
+                    {
+                        var newId = FluidLevelUtilities.GetBlockIdForLevel(currentLevel + levelOfAdd, world, blockSel.Block);
+                        world.BlockAccessor.SetBlock(newId, blockSel.Position, BlockLayersAccess.Fluid); 
+                        world.RegisterCallbackUnique(OnDelayedWaterUpdateCheck, blockSel.Position, spreadDelay);
+                        return true;
+                    }
+                    else if (currentLevel + levelOfAdd > MAXLIQUIDLEVEL)
+                    {
+                        var overflow = currentLevel + levelOfAdd - MAXLIQUIDLEVEL;
+                        var baseId = FluidLevelUtilities.GetBlockIdForLevel(MAXLIQUIDLEVEL,world, blockSel.Block);
+                        world.BlockAccessor.SetBlock(baseId,blockSel.Position, BlockLayersAccess.Fluid);
+                        var overflowId = FluidLevelUtilities.GetBlockIdForLevel(overflow,world, blockSel.Block);
+                        world.BlockAccessor.SetBlock(overflowId,blockSel.Position.UpCopy(), BlockLayersAccess.Fluid);
+                        world.RegisterCallbackUnique(OnDelayedWaterUpdateCheck, blockSel.Position, spreadDelay);
+                        world.RegisterCallbackUnique(OnDelayedWaterUpdateCheck, blockSel.Position.UpCopy(), spreadDelay);
+                        return true;
+                    }
+                }
             }
 
             return base.DoPlaceBlock(world, byPlayer, blockSel, byItemStack, ref handling);
@@ -289,6 +320,74 @@ namespace FiniteWater.blockBehaviors
             }
 
             return ourBlock.LiquidLevel > 1 || facing == BlockFacing.DOWN;
+        }
+
+        [HarmonyPatch]
+        internal class FinitePatches
+        {
+            [HarmonyPostfix]
+            [HarmonyPatch(typeof(BlockLiquidContainerBase), nameof(BlockLiquidContainerBase.TryFillFromBlock), typeof(ItemSlot), typeof(EntityAgent), typeof(BlockPos))]
+            public static void TryFill(bool __result, EntityAgent byEntity, BlockPos pos)
+            {
+                if (__result)
+                {
+                    //Check for behaviour
+                    Block block = byEntity.World.BlockAccessor.GetBlock(pos, BlockLayersAccess.FluidOrSolid);
+                    if (block.HasBehavior<FiniteSpreadLevelling>())
+                    {
+                        var behaviour = block.GetBehavior<FiniteSpreadLevelling>();
+                        behaviour.TakeLiquid(byEntity.World, pos, block);
+                    }
+                }
+            }
+
+            static FieldInfo f_codeField = AccessTools.Field(typeof(JsonItemStack), nameof(JsonItemStack.Code));
+            static FieldInfo f_entityWorldField = AccessTools.Field(typeof(Entity), nameof(Entity.World));
+            static MethodInfo m_CalculateIdForAddingWater = SymbolExtensions.GetMethodInfo(() => CalculateWaterAddCode);
+
+            [HarmonyTranspiler]
+            [HarmonyPatch(typeof(BlockLiquidContainerBase), "SpillContents")]
+            public static IEnumerable<CodeInstruction> TranspilerContainerBase(IEnumerable<CodeInstruction> instructions)
+            {
+                var foundCodeField = false;
+                foreach (var instruction in instructions)
+                {
+                    if (instruction.LoadsField(f_codeField))
+                    {
+                        yield return instruction;
+                        yield return new CodeInstruction(OpCodes.Ldarg_2);
+                        yield return new CodeInstruction(OpCodes.Ldfld, f_entityWorldField);
+                        yield return new CodeInstruction(OpCodes.Ldarg_3);
+                        yield return new CodeInstruction(OpCodes.Call, m_CalculateIdForAddingWater);
+                        foundCodeField = true;
+                    } else
+                    {
+                        yield return instruction;
+                    }
+                }
+
+                if (!foundCodeField)
+                {
+                    throw new ArgumentException("Unable to find Code loading Field");
+                }
+            }
+
+
+            public static AssetLocation CalculateWaterAddCode(AssetLocation al,IWorldAccessor world, BlockSelection blockSel)
+            {
+                var pos = blockSel.Position;
+                var block = world.BlockAccessor.GetBlock(pos);
+                var intendedBlock = world.GetBlock(al);
+                if (intendedBlock.HasBehavior<FiniteSpreadLevelling>() && block.HasBehavior<FiniteSpreadLevelling>())
+                {
+                    var intendedLevel = FluidLevelUtilities.GetBlockLevel(intendedBlock, intendedBlock);
+                    var existingLevel = FluidLevelUtilities.GetBlockLevel(block, intendedBlock);
+                    var newLevel = Math.Min(MAXLIQUIDLEVEL, existingLevel + intendedLevel);
+                    return intendedBlock.CodeWithVariant("level", newLevel.ToString());
+                }
+                
+                return al;   
+            }
         }
     }
 }
