@@ -45,6 +45,15 @@
     "*-2": 9997,
     "*-1": 9998
   },
+  "walkspeedmultiplierByType": {
+    "*-1": 0.95,
+    "*-2": 0.9,
+    "*-3": 0.85,
+    "*-4": 0.8,
+    "*-5": 0.75,
+    "*-6": 0.7,
+    "*-7": 0.65
+  },
   "lightAbsorption": 2,
   "climateColorMap": "climateWaterTint",
   "drops": [],

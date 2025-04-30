@@ -12,12 +12,12 @@ namespace FiniteWater
     {
         public static int GetBlockIdForLevel(int level, IWorldAccessor world, Block baseBlock)
         {
-            if (level == 0)
+            if (level <= 0)
             {
                 //Empty == air
                 return 0;
             }
-            if (level >= 1 && level <= 16)
+            if (level >= 1 && level <= 7)
             {
                 var newAsset = baseBlock.CodeWithVariant("level", level.ToString());
                 var newBlock = world.GetBlock(newAsset);
@@ -49,9 +49,9 @@ namespace FiniteWater
             }
         }
 
-        public static int GetBlockLevel(IBlockAccessor blockAccessor, BlockPos pos, Block baseBlock)
+        public static int GetBlockLevel(IBlockAccessor blockAccessor, BlockPos pos, Block baseBlock, bool waterOnly = false)
         {
-            var block = blockAccessor.GetBlock(pos, BlockLayersAccess.Default);
+            var block = blockAccessor.GetBlock(pos, waterOnly ? BlockLayersAccess.Fluid : BlockLayersAccess.Default);
             return GetBlockLevel(block,baseBlock);
         }
     }

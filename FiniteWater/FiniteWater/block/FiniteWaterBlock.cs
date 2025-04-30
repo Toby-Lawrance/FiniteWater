@@ -28,43 +28,33 @@ namespace FiniteWater.block
         public override bool ShouldReceiveServerGameTicks(IWorldAccessor world, BlockPos pos, Random offThreadRandom, out object extra)
         {            
             base.ShouldReceiveServerGameTicks(world, pos, offThreadRandom, out extra);
+            //We only want to check for evaporation if there is air above
+            var upPos = pos.UpCopy();
+            var aboveBlock = world.BlockAccessor.GetBlock(upPos, BlockLayersAccess.Default);
+            if (aboveBlock.Id != 0)
+            {
+                return false;
+            }
             return true;
         }
 
-        public long TotalHoursLastEvaporationCheck = 0;
-
         public override void OnServerGameTick(IWorldAccessor world, BlockPos pos, object extra = null)
         {
-            var timeNow = (long)world.Calendar.ElapsedHours;
-            if(TotalHoursLastEvaporationCheck != 0)
+            //Consider temperature?
+            if (world.Rand.NextDouble() < evaporationChance)
             {
-                //Check for air above
-                var upPos = pos.UpCopy();
-                var aboveBlock = world.BlockAccessor.GetBlock(upPos,BlockLayersAccess.Default);
-                if(aboveBlock.Id == 0)
+                world.Logger.Log(EnumLogType.Debug, $"Evaporating the finite water at ({pos.ToLocalPosition(world.Api)}) by one level");
+                var thisBlock = world.BlockAccessor.GetBlock(pos);
+                var currentLevel = thisBlock.LiquidLevel;
+                var newId = FluidLevelUtilities.GetBlockIdForLevel(currentLevel - 1, world, this);
+                world.BulkBlockAccessor.SetBlock(newId, pos, BlockLayersAccess.Fluid);
+                //Once it is air, we can give up
+                if (newId == 0)
                 {
-                    for (long i = TotalHoursLastEvaporationCheck; i < timeNow; i++)
-                    {
-                        if (world.Rand.NextDouble() < evaporationChance)
-                        {
-                            world.Logger.Log(EnumLogType.Debug, $"Evaporating the finite water at ({pos.ToLocalPosition(world.Api)}) by one level");
-                            var thisBlock = world.BlockAccessor.GetBlock(pos);
-                            var currentLevel = thisBlock.LiquidLevel;
-                            var newId = FluidLevelUtilities.GetBlockIdForLevel(currentLevel - 1, world, this);
-                            world.BulkBlockAccessor.SetBlock(newId, pos, BlockLayersAccess.Fluid);
-                            //Once it is air, we can give up
-                            if (newId == 0)
-                            {
-                                world.Logger.Log(EnumLogType.Debug, $"Water at ({pos.ToLocalPosition(world.Api)}) has fully evaporated");
-                                break;
-                            }
-                        }
-                    }
-                    world.BulkBlockAccessor.Commit();
+                    world.Logger.Log(EnumLogType.Debug, $"Water at ({pos.ToLocalPosition(world.Api)}) has fully evaporated");
                 }
             }
-
-            TotalHoursLastEvaporationCheck = timeNow;
+            world.BulkBlockAccessor.Commit();
             base.OnServerGameTick(world, pos, extra);
         }
 

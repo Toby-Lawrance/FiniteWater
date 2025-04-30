@@ -14,8 +14,10 @@ using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
+using Vintagestory.API.Util;
 using Vintagestory.Common;
 using Vintagestory.GameContent;
+using Vintagestory.ModDb;
 using Vintagestory.ServerMods;
 
 namespace FiniteWater.blockBehaviors
@@ -44,26 +46,8 @@ namespace FiniteWater.blockBehaviors
 
         public override void OnBlockPlaced(IWorldAccessor world, BlockPos blockPos, ref EnumHandling handling)
         {
-            var whatsThere = world.BlockAccessor.GetBlock(blockPos, BlockLayersAccess.Fluid);
-            if (whatsThere.Class == this.block.Class)
-            {
-                //Yay
-                world.Api.Logger.Debug($"There was a thing here of: {whatsThere.Code}");
-            } else if (whatsThere.Id == 0)
-            {
-                world.Api.Logger.Debug($"There was only air there");
-            }
+            world.RegisterCallbackUnique(OnDelayedWaterUpdateCheck, blockPos, spreadDelay);
             base.OnBlockPlaced(world, blockPos, ref handling);
-        }
-        
-        public override bool CanPlaceBlock(IWorldAccessor world, IPlayer byPlayer, BlockSelection blockSel, ref EnumHandling handling, ref string failureCode)
-        {
-            return base.CanPlaceBlock(world, byPlayer, blockSel, ref handling, ref failureCode);
-        }
-
-        public override bool TryPlaceBlock(IWorldAccessor world, IPlayer byPlayer, ItemStack itemstack, BlockSelection blockSel, ref EnumHandling handling, ref string failureCode)
-        {
-            return base.TryPlaceBlock(world, byPlayer, itemstack, blockSel, ref handling, ref failureCode);
         }
 
         public override bool DoPlaceBlock(IWorldAccessor world, IPlayer byPlayer, BlockSelection blockSel, ItemStack byItemStack, ref EnumHandling handling)
@@ -80,7 +64,6 @@ namespace FiniteWater.blockBehaviors
                     {
                         var newId = FluidLevelUtilities.GetBlockIdForLevel(currentLevel + levelOfAdd, world, blockSel.Block);
                         world.BlockAccessor.SetBlock(newId, blockSel.Position, BlockLayersAccess.Fluid); 
-                        world.RegisterCallbackUnique(OnDelayedWaterUpdateCheck, blockSel.Position, spreadDelay);
                         return true;
                     }
                     else if (currentLevel + levelOfAdd > MAXLIQUIDLEVEL)
@@ -90,7 +73,6 @@ namespace FiniteWater.blockBehaviors
                         world.BlockAccessor.SetBlock(baseId,blockSel.Position, BlockLayersAccess.Fluid);
                         var overflowId = FluidLevelUtilities.GetBlockIdForLevel(overflow,world, blockSel.Block);
                         world.BlockAccessor.SetBlock(overflowId,blockSel.Position.UpCopy(), BlockLayersAccess.Fluid);
-                        world.RegisterCallbackUnique(OnDelayedWaterUpdateCheck, blockSel.Position, spreadDelay);
                         world.RegisterCallbackUnique(OnDelayedWaterUpdateCheck, blockSel.Position.UpCopy(), spreadDelay);
                         return true;
                     }
@@ -116,7 +98,23 @@ namespace FiniteWater.blockBehaviors
             world.BulkBlockAccessor.Commit();
         }
 
-        public void TakeLiquid(IWorldAccessor world, BlockPos pos, Block b)
+        public void AddLiquid(IWorldAccessor world, BlockPos pos, Block b, int amount = 1)
+        {
+            var level = b.LiquidLevel;
+            if(level < MAXLIQUIDLEVEL)
+            {
+                var levelToAdd = GameMath.Min(MAXLIQUIDLEVEL - level, amount);
+                SetLiquidLevelAt(pos, level + levelToAdd, world, level);
+                amount -= levelToAdd;
+            }
+            if(amount > 0)
+            {
+                var overflowPos = pos.UpCopy();
+                AddLiquid(world, overflowPos, b, amount);
+            }
+        }
+
+        public void TakeLiquid(IWorldAccessor world, BlockPos pos, Block b, int amount = 1)
         {
             var level = b.LiquidLevel;
             if(level > 0)
@@ -137,43 +135,99 @@ namespace FiniteWater.blockBehaviors
                 ourSolid.GetLiquidBarrierHeightOnSide(BlockFacing.DOWN, pos) == 1.0;
 
             //First move downwards
-            if(onSolidGround || !TryMoveDownwards(world,ourSolid,ourBlock,pos))
+            if(!TryMoveDownwards(world, ourSolid, ourBlock, pos))
             {
                 //Check for somewhere to pour
-                List<BlockPos> downwardPours = FindDownwardPours(world, pos, ourBlock);
-                if(downwardPours.Count > 0)
+                if(!TryPouringDown(world,ourSolid,ourBlock,pos) && waterLevel > 1)
                 {
-                    if(TryPouringDown(world,ourSolid,ourBlock,pos, downwardPours))
-                    {
-                        return;
-                    }
-                }
-                //Then we try to spread
-                
-                if (waterLevel > 1)
-                {
+                    //Then we try to spread
                     TryMoveHorizontal(world, ourBlock, ourSolid, pos);
-                }
-                
+                }                
 
             }            
         }
 
-        public List<BlockPos> FindDownwardPours(IWorldAccessor world, BlockPos pos, Block ourBlock, bool sortByWind = true)
+        public BlockPos[] FindDownwardPours(IWorldAccessor world, BlockPos pos, Block ourBlock, Block ourSolid, bool sortByWind = true)
         {
-            var shapeOffsets = ShapeUtil.GetSquarePointsSortedByMDist(1);
-            var validBlockPos = new List<BlockPos>();
-            foreach (var shapeOffset in shapeOffsets)
+            var validBlockPos = BlockFacing.HORIZONTALS.Where(f =>
             {
-                var nPos = pos.AddCopy(shapeOffset.X,0,shapeOffset.Y);
+                var nPos = pos.AddCopy(f);
+                if (!CanSpreadIntoBlock(ourBlock, ourSolid, pos, nPos, f, world))
+                {
+                    return false;
+                }
+
+                nPos.Down();
+                var nBlockSolidBelow = world.BlockAccessor.GetBlock(nPos, BlockLayersAccess.SolidBlocks);
+                if(nBlockSolidBelow.GetLiquidBarrierHeightOnSide(BlockFacing.UP,nPos) >= 1.0)
+                {
+                    return false;
+                }
+
+                var nBlockLiquidBelow = world.BlockAccessor.GetBlock(nPos, BlockLayersAccess.Fluid);
+                if (nBlockLiquidBelow.LiquidLevel == MAXLIQUIDLEVEL)
+                {
+                    return false;
+                }
+
+                return true;
+            }).Select(f => pos.AddCopy(f).Down());
+
+
+            if(sortByWind)
+            {
+                var wind = world.BlockAccessor.GetWindSpeedAt(pos);
+                validBlockPos = validBlockPos.OrderByDescending(p => (p - pos).ToVec3d().Dot(wind));
             }
 
-            return validBlockPos;
+            return validBlockPos.ToArray();
         }
 
-        public bool TryPouringDown(IWorldAccessor world, Block ourSolid, Block ourBlock, BlockPos pos, List<BlockPos> pourPos)
+        public bool TryPouringDown(IWorldAccessor world, Block ourSolid, Block ourBlock, BlockPos pos)
         {
-            return false;
+            var pourPos = FindDownwardPours(world, pos, ourBlock, ourSolid, true);
+            if(pourPos.Count() == 0)
+            {
+                return false;
+            }
+
+            var totalWaterLevel = ourBlock.LiquidLevel + pourPos.Sum(p => FluidLevelUtilities.GetBlockLevel(world.BlockAccessor,pos,this.block));
+
+            var totalWaterLevelSet = 0;
+            var i = 0;
+            //Just in case this logic is messy and gets stuck
+            var maxIterations = ourBlock.LiquidLevel + 1;
+            var iterations = 0;
+            var madeChanges = false;
+            while(totalWaterLevelSet < ourBlock.LiquidLevel && iterations < maxIterations)
+            {
+                iterations++;
+                var liquidLevelAtPos = FluidLevelUtilities.GetBlockLevel(world.BlockAccessor, pourPos[i], this.block,true);
+                if(liquidLevelAtPos == MAXLIQUIDLEVEL)
+                {
+                    continue;
+                }
+
+                var newLevel = liquidLevelAtPos + 1;
+                totalWaterLevelSet++;
+                SetLiquidLevelAt(pourPos[i], newLevel, world, liquidLevelAtPos);
+                SetLiquidLevelAt(pos, ourBlock.LiquidLevel - 1, world, ourBlock.LiquidLevel);
+
+                ourBlock = world.BlockAccessor.GetBlock(pos, BlockLayersAccess.Fluid);
+                i = ++i % pourPos.Count();
+            }
+
+            if(iterations >= maxIterations)
+            {
+                world.Api.Logger.Warning($"TryPouringDown for finite-water reached a limit whilst trying to pour downwards. This is likely a bug, please report it.");
+            }
+
+            if (totalWaterLevelSet != totalWaterLevel)
+            {
+                world.Api.Logger.Error($"Finite water with total amount: {totalWaterLevel} has changed to {totalWaterLevelSet}");
+            }
+
+            return madeChanges;
         }
 
         public bool TryMoveDownwards(IWorldAccessor world, Block ourSolid, Block ourBlock, BlockPos pos)
@@ -196,6 +250,14 @@ namespace FiniteWater.blockBehaviors
                 SetLiquidLevelAt(pos, newLevel, world, currentLevel);
                 return true;
             }
+            //If we're on top of regular water. Just delete ourselves
+            var blockF = world.BlockAccessor.GetBlock(downPos, BlockLayersAccess.Fluid);
+            var canMerge = (ourBlock.LiquidCode?.Contains("water") ?? false) && (blockF.LiquidCode?.Contains("water") ?? false);
+            if (blockF.Id != 0 && canMerge)
+            {
+                SetLiquidLevelAt(pos, 0, world, ourBlock.LiquidLevel);
+            }
+
             return false;
         }
 
@@ -280,6 +342,15 @@ namespace FiniteWater.blockBehaviors
             {
                 world.RegisterCallbackUnique(OnDelayedWaterUpdateCheck, npos, spreadDelay);
             }
+            foreach (var val in Cardinal.ALL)
+            {
+                npos.Set(pos.X + val.Normali.X, pos.Y, pos.Z + val.Normali.Z);
+                neib = world.BlockAccessor.GetBlock(npos, BlockLayersAccess.Fluid);
+                if (neib.HasBehavior<FiniteSpreadLevelling>())
+                {
+                    world.RegisterCallbackUnique(OnDelayedWaterUpdateCheck, npos, spreadDelay);
+                }
+            }
             npos.Down();
 
             foreach (var val in Cardinal.ALL)
@@ -332,7 +403,7 @@ namespace FiniteWater.blockBehaviors
                 if (__result)
                 {
                     //Check for behaviour
-                    Block block = byEntity.World.BlockAccessor.GetBlock(pos, BlockLayersAccess.FluidOrSolid);
+                    Block block = byEntity.World.BlockAccessor.GetBlock(pos, BlockLayersAccess.Fluid);
                     if (block.HasBehavior<FiniteSpreadLevelling>())
                     {
                         var behaviour = block.GetBehavior<FiniteSpreadLevelling>();
@@ -375,7 +446,7 @@ namespace FiniteWater.blockBehaviors
 
             public static AssetLocation CalculateWaterAddCode(AssetLocation al,IWorldAccessor world, BlockSelection blockSel)
             {
-                var pos = blockSel.Position;
+                var pos = blockSel.Position.AddCopy(blockSel.Face);
                 var block = world.BlockAccessor.GetBlock(pos);
                 var intendedBlock = world.GetBlock(al);
                 if (intendedBlock.HasBehavior<FiniteSpreadLevelling>() && block.HasBehavior<FiniteSpreadLevelling>())

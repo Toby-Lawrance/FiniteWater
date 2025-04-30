@@ -1,10 +1,12 @@
 ﻿using FiniteWater.block;
 using FiniteWater.blockBehaviors;
+using FiniteWater.Rain;
 using HarmonyLib;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
 using Vintagestory.API.Server;
+using Vintagestory.GameContent;
 
 namespace FiniteWater
 {
@@ -27,9 +29,14 @@ namespace FiniteWater
             }
         }
 
+        public WeatherSimulationRainWater rainWeather;
+
         public override void StartServerSide(ICoreServerAPI api)
         {
             Mod.Logger.Notification("Hello from template mod server side: " + Lang.Get("finitewater:hello"));
+            
+            var serverWeather = api.ModLoader.GetModSystem<WeatherSystemServer>();
+            rainWeather = new WeatherSimulationRainWater(api, serverWeather);
         }
 
         public override void StartClientSide(ICoreClientAPI api)
